@@ -1,0 +1,474 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>tracking.js - face with camera</title>
+
+  <%= javascript_include_tag "application" %>
+
+  <style>
+      #video, #canvas {
+          margin-left: 80px;
+          margin-top: 25px;
+          position: absolute;
+      }
+      .demo-score {
+          margin-left: 180px;
+          margin-top: 140px;
+          position:absolute;
+      }
+      @font-face {
+          font-family: 'Icomoon';
+          src: url(<%= asset_path('assets/Hero.ttf') %>);
+          font-weight: normal;
+          font-style: normal;
+      }
+  </style>
+</head>
+<body>
+<div class="demo-title" style="text-align:center; width: 450px">
+  <text style="font-family: 'Icomoon'; font-size: 30px">DRUM HERO TEST</text>
+</div>
+<div class="demo-frame">
+  <div class="demo-container">
+    <video id="video" width="300" height="200" preload autoplay loop muted controls></video>
+    <canvas id="canvas" width="1600" height="1600"></canvas>
+  </div>
+</div>
+
+<script>
+    var threshold = 30;
+    var huemin = 0.0;
+    var huemax = 0.1;
+    var satmin = 0.3;
+    var satmax = 1.0;
+    var valmin = 0.4;
+    var valmax = 1.0;
+
+    function rgb2hsv (r,g,b) {
+        var computedH = 0;
+        var computedS = 0;
+        var computedV = 0;
+
+        //remove spaces from input RGB values, convert to int
+        var r = parseInt( (''+r).replace(/\s/g,''),10 );
+        var g = parseInt( (''+g).replace(/\s/g,''),10 );
+        var b = parseInt( (''+b).replace(/\s/g,''),10 );
+
+        if ( r==null || g==null || b==null ||
+                isNaN(r) || isNaN(g)|| isNaN(b) ) {
+            alert ('Please enter numeric RGB values!');
+            return;
+        }
+        if (r<0 || g<0 || b<0 || r>255 || g>255 || b>255) {
+            alert ('RGB values must be in the range 0 to 255.');
+            return;
+        }
+        r=r/255; g=g/255; b=b/255;
+        var minRGB = Math.min(r,Math.min(g,b));
+        var maxRGB = Math.max(r,Math.max(g,b));
+
+        // Black-gray-white
+        if (minRGB==maxRGB) {
+            computedV = minRGB;
+            return [0,0,computedV];
+        }
+
+        // Colors other than black-gray-white:
+        var d = (r==minRGB) ? g-b : ((b==minRGB) ? r-g : b-r);
+        var h = (r==minRGB) ? 3 : ((b==minRGB) ? 1 : 5);
+        computedH = 60*(h - d/(maxRGB - minRGB));
+        computedS = (maxRGB - minRGB)/maxRGB;
+        computedV = maxRGB;
+        return [computedH,computedS,computedV];
+    }
+
+    function rgb2hsv2(r,g,b) {
+        r = r / 255;
+        g = g / 255;
+        b = b / 255;
+
+        var max = Math.max(r, g, b),
+                min = Math.min(r, g, b),
+
+                h, s, v = max,
+
+                d = max - min;
+
+        if (max === 0) {
+            s = 0;
+        } else {
+            s = d/max;
+        }
+
+        if (max == min) {
+            h = 0; // achromatic
+        } else {
+            switch(max){
+                case r:
+                    h = (g - b) / d + (g < b ? 6 : 0);
+                    break;
+                case g:
+                    h = (b - r) / d + 2;
+                    break;
+                case b:
+                    h = (r - g) / d + 4;
+                    break;
+                default:
+                    break;
+            }
+            h /= 6;
+        }
+
+        return [h, s, v];
+    }
+
+    function rgb2YCbCr(r,g,b) {
+        return [( 0.299   * r + 0.587   * g + 0.114   * b), (-0.16874 * r - 0.33126 * g + 0.50000 * b), ( 0.50000 * r - 0.41869 * g - 0.08131 * b)];
+    }
+
+    function isWithinThreshold(pixel1, pixel2) {
+        var sum = 0;
+        for (var i = 0; i < 3; i++) {
+            sum += Math.abs(pixel1[i] - pixel2[i]) * Math.abs(pixel1[i] - pixel2[i]);
+        }
+        if (sum > threshold * threshold) {
+            return false;
+        }
+        return true;
+    }
+
+    function getMinimumY(rects) {
+        var min = Infinity;
+        rects.forEach(function(rect) {
+            if (rect.y < min) {
+                min = rect.y;
+            }
+        });
+        return min;
+    }
+
+    function mergeRectangles(rects, width, height) {
+        var intersects;
+        var results = [];
+        var minDimension = 30;
+        var maxDimension = 200;
+
+        for (var r = 0; r < rects.length; r++) {
+            var r1 = rects[r];
+            intersects = true;
+            for (var s = r + 1; s < rects.length; s++) {
+                var r2 = rects[s];
+                if (tracking.Math.intersectRect(r1.x, r1.y, r1.x + r1.width, r1.y + r1.height, r2.x, r2.y, r2.x + r2.width, r2.y + r2.height)) {
+                    intersects = false;
+                    var x1 = Math.min(r1.x, r2.x);
+                    var y1 = Math.min(r1.y, r2.y);
+                    var x2 = Math.max(r1.x + r1.width, r2.x + r2.width);
+                    var y2 = Math.max(r1.y + r1.height, r2.y + r2.height);
+                    r2.height = y2 - y1;
+                    r2.width = x2 - x1;
+                    r2.x = x1;
+                    r2.y = y1;
+                    break;
+                }
+            }
+
+            if (intersects) {
+                if (r1.y + r1.height >= height - 10 && r1.width >= minDimension) {
+                    results.push(r1);
+                } else if (r1.width >= minDimension && r1.height >= minDimension && r1.width <= maxDimension && r1.height <= maxDimension) {
+                    results.push(r1);
+                }
+            }
+        }
+
+        return results;
+    };
+
+    function DrumActions(id) {
+        this.minDrum = 3;
+        this.string_id = id;
+        this.score = 0;
+        this.Ys = [];
+
+        this.reset = function() {
+            this.Ys = [];
+            this.numOff = 0;
+        }
+
+        this.addAction = function(newY) {
+            if (this.Ys.length == 0 || this.Ys[this.Ys.length - 1] < newY) {
+                this.Ys.push(newY);
+            } else {
+                this.reset();
+            }
+            if (this.Ys.length == this.minDrum) {
+                if ((id == 'left' && drumBand.reds[0] >= drumBand.maxHeight - 4 * drumBand.delta) || (id == 'right' && drumBand.greens[0] >= drumBand.maxHeight - 4 * drumBand.delta)) {
+                    this.score += 1;
+                    document.getElementById(this.string_id).textContent = this.score;
+                }
+                return true;
+            }
+            return false;
+        }
+    };
+
+    var leftDrum = new DrumActions('left');
+    var rightDrum = new DrumActions('right');
+
+    var numSamples = 0;
+    var minNumLeft = 0;
+    var minNumRight = 0;
+
+    var prev_points = undefined;
+    var prev_prev_points = undefined;
+    var prev_prev_prev_points = undefined;
+    var prev_ans = undefined;
+    var prev_prev_ans = undefined;
+
+    window.onload = function() {
+        var video = document.getElementById('video');
+        var canvas = document.getElementById('canvas');
+        var context = canvas.getContext('2d');
+
+        var MyTracker = function() {
+            MyTracker.base(this, 'constructor');
+        }
+        tracking.inherits(MyTracker, tracking.Tracker);
+        tracking.ColorTracker.prototype.setMinDimension(5);
+
+        var dx = [-1, -1, -1, 0, 0, 1, 1, 1];
+        var dy = [-1, 0, 1, -1, 1, -1, 0, 1];
+
+        MyTracker.prototype.track = function(pixels, width, height) {
+            if (typeof prev_points !== 'undefined') {
+                var visited = new Array(height);
+                for (var i = 0; i < height; i++) {
+                    visited[i] = new Array(width);
+                }
+                var groups = [];
+                var raw_groups = [];
+                var num_left_prev = num_left;
+                var num_left = 0;
+                var num_right_prev = num_right;
+                var num_right = 0;
+                for (var i = 0; i < height; i++) {
+                    for (var j = 0; j < width; j++) {
+                        var loc = (i * width + j) * 4;
+                        if (!isWithinThreshold(pixels.subarray(loc, loc + 4), prev_points.subarray(loc, loc + 4))) {
+                            if (i >= 100 && j <= 150) {
+                                num_left += 1;
+                            } else if (i >= 100 && j > 150) {
+                                num_right += 1;
+                            }
+                        }
+                        if (visited[i][j]) {
+                            continue;
+                        }
+                        visited[i][j] = true;
+                        if (!isWithinThreshold(pixels.subarray(loc, loc + 4), prev_points.subarray(loc, loc + 4))) {
+                            var points = [];
+                            var minY = j;
+                            points.push(j);
+                            points.push(i);
+                            for (var z = 0; z < points.length / 2; z++) {
+                                for (var d = 0; d < 9; d++) {
+                                    var y = points[z * 2] + dy[d];
+                                    var x = points[z * 2 + 1] + dx[d];
+                                    if (x < height && x >= 0 && y < width && y >= 0 && !visited[x][y]) {
+                                        visited[x][y] = true;
+                                        var new_loc = (x * width + y) * 4;
+                                        if (!isWithinThreshold(pixels.subarray(new_loc, new_loc + 4), prev_points.subarray(new_loc, new_loc + 4))) {
+                                            points.push(y);
+                                            if (y < minY) {
+                                                minY = y;
+                                            }
+                                            points.push(x);
+                                        }
+                                    }
+                                }
+                            }
+                            if (points.length > 500 || minY > 100) {
+                                raw_groups.push(points);
+                                var dims = tracking.ColorTracker.prototype.calculateDimensions_(points, points.length)
+                                groups.push(dims);
+                            }
+                        }
+                    }
+                }
+                if (num_left_prev - num_left > 0) {
+                    leftDrum.reset();
+                }
+                if (num_right_prev - num_right > 0) {
+                    rightDrum.reset();
+                }
+                if (groups.length > 0) {
+                    var ans = mergeRectangles(groups, width, height);
+                } else {
+                    var ans = [];
+                }
+                this.emit('track', {
+                    data: ans,
+                    width: width,
+                    height: height,
+                    points: pixels,
+                    prev_points: prev_points,
+                    prev_prev_points: prev_prev_points,
+                    prev_prev_prev_points: prev_prev_prev_points,
+                    prev_ans: prev_ans,
+                    prev_prev_ans: prev_prev_ans
+                });
+            }
+            if (typeof prev_prev_points !== 'undefined') {
+                prev_prev_prev_points = prev_prev_points;
+            }
+            if (typeof prev_points !== 'undefined') {
+                prev_prev_points = prev_points;
+            }
+            if (typeof prev_ans !== 'undefined') {
+                prev_prev_ans = prev_ans;
+            }
+            prev_ans = ans;
+            prev_points = pixels;
+        }
+        var tracker = new MyTracker();
+
+        tracker.on('track', function(event) {
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            var left_rects = [];
+            var right_rects = [];
+            var num_left = 0;
+            var num_right = 0;
+            var num_left_prev = 0;
+            var num_right_prev = 0;
+            var MAX_WIDTH = 320;
+            var MAX_HEIGHT = 220;
+
+            if (typeof event.prev_points !== 'undefined') {
+                var img = context.createImageData(event.width, event.height);
+                for (var i = 0; i < event.height; i++) {
+                    for (var j = 0; j < event.width; j++) {
+                        var loc = (i * event.width + j) * 4;
+                        img.data[loc] = event.points[loc] - event.prev_points[loc];
+                        img.data[loc + 1] = event.points[loc + 2] - event.prev_points[loc + 2];
+                        img.data[loc + 2] = event.points[loc + 3] - event.prev_points[loc + 3];
+                        img.data[loc + 3] = 255;
+                    }
+                }
+                context.putImageData(img, MAX_WIDTH, 0);
+            }
+
+            if (typeof event.prev_points !== 'undefined') {
+                var img = context.createImageData(event.width, event.height);
+                for (var i = 0; i < event.height; i++) {
+                    for (var j = 0; j < event.width; j++) {
+                        var loc = (i * event.width + j) * 4;
+                        if(!isWithinThreshold(event.points.subarray(loc, loc + 4), event.prev_points.subarray(loc, loc + 4))) {
+                            img.data[loc] = 255;
+                            img.data[loc + 3] = 255;
+                        }
+                    }
+                }
+                context.putImageData(img, MAX_WIDTH * 2, 0);
+            }
+            if (typeof event.prev_points !== 'undefined') {
+                var img = context.createImageData(event.width, event.height);
+                for (var i = 0; i < event.height; i++) {
+                    for (var j = 0; j < event.width; j++) {
+                        var loc = (i * event.width + j) * 4;
+                        var hsv = rgb2hsv(event.points[loc], event.points[loc + 1], event.points[loc + 2]);
+                        if(hsv[0] >= 50 && hsv[1] <= 0.23) {
+                            img.data[loc] = 255;
+                            img.data[loc + 3] = 255;
+                        }
+                    }
+                }
+                context.putImageData(img, MAX_WIDTH * 3, 0);
+            }
+
+            if (typeof event.prev_points !== 'undefined') {
+                var img = context.createImageData(event.width, event.height);
+                for (var i = 0; i < event.height * event.width * 4; i++) {
+                    img.data[i] = event.prev_points[i];
+                }
+                context.putImageData(img, MAX_WIDTH * 1.5, MAX_HEIGHT);
+                if (typeof event.data !== 'undefined') {
+                    event.data.forEach(function (rect) {
+                            context.strokeStyle = 'orange';
+                            context.strokeRect(rect.x + MAX_WIDTH * 1.5, rect.y + MAX_HEIGHT, rect.width, rect.height);
+                    });
+                }
+            }
+
+            if (typeof event.prev_prev_prev_points !== 'undefined') {
+                var img = context.createImageData(event.width, event.height);
+                for (var i = 0; i < event.height * event.width * 4; i++) {
+                    img.data[i] = event.prev_prev_prev_points[i];
+                }
+                context.putImageData(img, 0, MAX_HEIGHT * 2);
+                if (typeof event.prev_prev_ans !== 'undefined') {
+                    event.prev_prev_ans.forEach(function (rect) {
+                        if (rect.x <= 150 && rect.y > 100) {
+                            context.strokeStyle = 'red';
+                            context.strokeRect(rect.x, rect.y + MAX_HEIGHT * 2, rect.width, rect.height);
+                        } else if (rect.x > 150 && rect.y > 100) {
+                            context.strokeStyle = 'green';
+                            context.strokeRect(rect.x, rect.y + MAX_HEIGHT * 2, rect.width, rect.height);
+                        }
+                    });
+                }
+            }
+
+            if (typeof event.prev_prev_points !== 'undefined') {
+                var img = context.createImageData(event.width, event.height);
+                for (var i = 0; i < event.height * event.width * 4; i++) {
+                    img.data[i] = event.prev_prev_points[i];
+                }
+                context.putImageData(img, MAX_WIDTH, MAX_HEIGHT * 2);
+                if (typeof event.prev_ans !== 'undefined') {
+                    event.prev_ans.forEach(function (rect) {
+                        if (rect.x <= 150 && rect.y > 100) {
+                            context.strokeStyle = 'red';
+                            context.strokeRect(rect.x + MAX_WIDTH, rect.y + MAX_HEIGHT * 2, rect.width, rect.height);
+                        } else if (rect.x > 150 && rect.y > 100) {
+                            context.strokeStyle = 'green';
+                            context.strokeRect(rect.x + MAX_WIDTH, rect.y + MAX_HEIGHT * 2, rect.width, rect.height);
+                        }
+                    });
+                }
+            }
+
+            if (typeof event.prev_points !== 'undefined') {
+                var img = context.createImageData(event.width, event.height);
+                for (var i = 0; i < event.height * event.width * 4; i++) {
+                    img.data[i] = event.prev_points[i];
+                }
+                context.putImageData(img, MAX_WIDTH * 2, MAX_HEIGHT * 2);
+                if (typeof event.data !== 'undefined') {
+                    event.data.forEach(function (rect) {
+                        if (rect.x <= 150 && rect.y > 100) {
+                            context.strokeStyle = 'red';
+                            context.strokeRect(rect.x + MAX_WIDTH * 2, rect.y + MAX_HEIGHT * 2, rect.width, rect.height);
+                        } else if (rect.x > 150 && rect.y > 100) {
+                            context.strokeStyle = 'green';
+                            context.strokeRect(rect.x + MAX_WIDTH * 2, rect.y + MAX_HEIGHT * 2, rect.width, rect.height);
+                        }
+                    });
+                }
+            }
+
+            if (typeof event.points !== 'undefined') {
+                var img = context.createImageData(event.width, event.height);
+                for (var i = 0; i < event.height * event.width * 4; i++) {
+                    img.data[i] = event.points[i];
+                }
+                context.putImageData(img, MAX_WIDTH * 3, MAX_HEIGHT * 2);
+            }
+        });
+
+        tracking.track('#video', tracker, { camera: true });
+    };
+</script>
+
+</body>
+</html>
